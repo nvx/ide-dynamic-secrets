@@ -1,11 +1,7 @@
 package com.github.martinsucha.idedynamicsecrets
 
 import com.intellij.database.access.DatabaseCredentials
-import com.intellij.database.dataSource.DatabaseAuthProvider
-import com.intellij.database.dataSource.DatabaseConnection
-import com.intellij.database.dataSource.DatabaseConnectionInterceptor
-import com.intellij.database.dataSource.DatabaseConnectionManager
-import com.intellij.database.dataSource.LocalDataSource
+import com.intellij.database.dataSource.*
 import com.intellij.database.dataSource.url.template.MutableParametersHolder
 import com.intellij.database.dataSource.url.template.ParametersHolder
 import com.intellij.openapi.Disposable
@@ -19,7 +15,6 @@ import java.util.WeakHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import javax.swing.JComponent
-import javax.swing.event.DocumentListener
 
 const val DATABASE_CREDENTIAL_PROVIDER_ID = "com.github.martinsucha.idedynamicsecrets"
 const val DATABASE_PATH_PROPERTY = "com.github.martinsucha.idedynamicsecrets.path"
@@ -35,20 +30,20 @@ class DynamicSecretsAuthCredentialsProvider : DatabaseAuthProvider {
         silent: Boolean
     ): CompletionStage<DatabaseConnectionInterceptor.ProtoConnection>? {
         return CompletableFuture.supplyAsync {
-            val path = proto.connectionPoint.additionalProperties[DATABASE_PATH_PROPERTY]
+            val path = proto.connectionPoint.getAdditionalProperty(DATABASE_PATH_PROPERTY)
             if (path == null || path == "") {
                 throw ConfigurationException("vault path is not specified")
             }
-            val usernameKey = proto.connectionPoint.additionalProperties[DATABASE_USERNAME_KEY_PROPERTY]
+            val usernameKey = proto.connectionPoint.getAdditionalProperty(DATABASE_USERNAME_KEY_PROPERTY)
             if (usernameKey == null || usernameKey == "") {
                 throw ConfigurationException("vault username key is not specified")
             }
-            val passwordKey = proto.connectionPoint.additionalProperties[DATABASE_PASSWORD_KEY_PROPERTY]
+            val passwordKey = proto.connectionPoint.getAdditionalProperty(DATABASE_PASSWORD_KEY_PROPERTY)
             if (passwordKey == null || passwordKey == "") {
                 throw ConfigurationException("vault password key is not specified")
             }
 
-            val vault = proto.runConfiguration.project.getService(Vault::class.java)
+            val vault = proto.project.getService(Vault::class.java)
             val token = vault.getToken()
 
             val secret = vault.getClient().use {
@@ -56,7 +51,7 @@ class DynamicSecretsAuthCredentialsProvider : DatabaseAuthProvider {
                     it.fetchSecret(token, path)
                 }
             }
-            val lease = DatabaseLease(vault, secret.leaseID, proto.runConfiguration.project)
+            val lease = DatabaseLease(vault, secret.leaseID, proto.project)
             Disposer.register(vault, lease)
 
             if (!secret.data.containsKey(usernameKey)) {
@@ -84,27 +79,25 @@ class DynamicSecretsAuthCredentialsProvider : DatabaseAuthProvider {
 
     override fun getDisplayName(): String = "Dynamic Secrets"
 
-    override fun isApplicable(dataSource: LocalDataSource): Boolean = true
-
-    override fun isApplicableAsDefault(dataSource: LocalDataSource): Boolean = false
+    override fun isApplicable(dataSource: LocalDataSource, level: DatabaseAuthProvider.ApplicabilityLevel): Boolean = true
 
     override fun createWidget(
         project: Project?,
         credentials: DatabaseCredentials,
-        dataSource: LocalDataSource
+        config: DatabaseConnectionConfig
     ): DatabaseAuthProvider.AuthWidget {
         return DynamicSecretsAuthWidget()
     }
 
     override fun handleConnected(
-        connection: DatabaseConnection,
+        connection: DatabaseConnectionCore,
         proto: DatabaseConnectionInterceptor.ProtoConnection
     ): CompletionStage<*>? {
         // Move the lease from proto to connection.
         val lease = synchronized(lock) {
             protoLeases.remove(proto)!!
         }
-        val leaseHolder = proto.runConfiguration.project.getService(DatabaseConnectionLeaseHolder::class.java)
+        val leaseHolder = proto.project.getService(DatabaseConnectionLeaseHolder::class.java)
         leaseHolder.registerConnection(connection, lease)
         return super.handleConnected(connection, proto)
     }
@@ -147,21 +140,21 @@ class DynamicSecretsAuthWidget : DatabaseAuthProvider.AuthWidget {
         }
     }
 
-    override fun onChanged(p0: DocumentListener) {
+    override fun onChanged(p0: Runnable) {
         // no-op. Do we need to implement this?
     }
 
-    override fun save(dataSource: LocalDataSource, copyCredentials: Boolean) {
+    override fun save(config: DatabaseConnectionConfig, copyCredentials: Boolean) {
         panel.apply()
-        dataSource.additionalProperties[DATABASE_PATH_PROPERTY] = configuration.path
-        dataSource.additionalProperties[DATABASE_USERNAME_KEY_PROPERTY] = configuration.usernameKey
-        dataSource.additionalProperties[DATABASE_PASSWORD_KEY_PROPERTY] = configuration.passwordKey
+        config.setAdditionalProperty(DATABASE_PATH_PROPERTY,configuration.path)
+        config.setAdditionalProperty(DATABASE_USERNAME_KEY_PROPERTY, configuration.usernameKey)
+        config.setAdditionalProperty(DATABASE_PASSWORD_KEY_PROPERTY, configuration.passwordKey)
     }
 
-    override fun reset(dataSource: LocalDataSource, resetCredentials: Boolean) {
-        configuration.path = dataSource.additionalProperties[DATABASE_PATH_PROPERTY] ?: ""
-        configuration.usernameKey = dataSource.additionalProperties[DATABASE_USERNAME_KEY_PROPERTY] ?: "username"
-        configuration.passwordKey = dataSource.additionalProperties[DATABASE_PASSWORD_KEY_PROPERTY] ?: "password"
+    override fun reset(point: DatabaseConnectionPoint, resetCredentials: Boolean) {
+        configuration.path = point.getAdditionalProperty(DATABASE_PATH_PROPERTY) ?: ""
+        configuration.usernameKey = point.getAdditionalProperty(DATABASE_USERNAME_KEY_PROPERTY) ?: "username"
+        configuration.passwordKey = point.getAdditionalProperty(DATABASE_PASSWORD_KEY_PROPERTY) ?: "password"
         panel.reset()
     }
 
@@ -208,7 +201,7 @@ class DatabaseLease(private val vault: Vault, private val leaseID: String, priva
         }
         ProgressManager.getInstance().runProcessWithProgressSynchronously(
             runnable,
-            "Revoking Vault lease",
+            "Revoking Vault Lease",
             false,
             project,
             null
@@ -231,15 +224,15 @@ class DatabaseConnectionListener : DatabaseConnectionManager.Listener {
 class DatabaseConnectionLeaseHolder(@Suppress("UNUSED_PARAMETER") project: Project) {
 
     private val lock = Any()
-    private val leaseByConnection = mutableMapOf<DatabaseConnection, Disposable>()
+    private val leaseByConnection = mutableMapOf<DatabaseConnectionCore, Disposable>()
 
-    fun registerConnection(connection: DatabaseConnection, lease: DatabaseLease) {
+    fun registerConnection(connection: DatabaseConnectionCore, lease: DatabaseLease) {
         synchronized(lock) {
             leaseByConnection[connection] = lease
         }
     }
 
-    fun unregisterConnection(connection: DatabaseConnection): Disposable? {
+    fun unregisterConnection(connection: DatabaseConnectionCore): Disposable? {
         synchronized(lock) {
             return leaseByConnection.remove(connection)
         }

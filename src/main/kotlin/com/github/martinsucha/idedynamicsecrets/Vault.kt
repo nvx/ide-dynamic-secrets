@@ -20,13 +20,16 @@ import com.intellij.util.net.ssl.CertificateManager
 import com.intellij.util.xmlb.XmlSerializerUtil
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
-import io.ktor.client.features.ResponseException
+import io.ktor.client.plugins.*
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.put
 import io.ktor.http.URLParserException
 import io.ktor.http.URLProtocol
 import io.ktor.http.Url
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -90,27 +93,27 @@ class VaultClient(private val configuration: VaultState) : Closeable {
      */
     suspend fun fetchSecret(token: String, path: String): VaultSecret {
         val jsonData = wrapClientException("Fetch secret $path from Vault") {
-            httpClient.get<String>(secretURL(configuration.vaultAddress, path)) {
+            httpClient.get(secretURL(configuration.vaultAddress, path)) {
                 header("X-Vault-Token", token)
             }
         }
-        return parseSecret(jsonData)
+        return parseSecret(jsonData.bodyAsText())
     }
 
     suspend fun revokeLease(token: String, leaseID: String) {
         // https://www.vaultproject.io/api-docs/system/leases#revoke-lease
         wrapClientException("Revoke lease $leaseID") {
-            httpClient.put<String>(joinURL(configuration.vaultAddress, "/v1/sys/leases/revoke")) {
+            httpClient.put(joinURL(configuration.vaultAddress, "/v1/sys/leases/revoke")) {
                 header("X-Vault-Token", token)
-                header("Content-Type", "application/json")
-                body = JsonObject(mapOf("lease_id" to JsonPrimitive(leaseID))).toString()
+                contentType(ContentType.Application.Json)
+                setBody(JsonObject(mapOf("lease_id" to JsonPrimitive(leaseID))).toString())
             }
         }
     }
 
     suspend fun lookupSelf(token: String) {
         wrapClientException("Lookup information about token") {
-            httpClient.get<String>(joinURL(configuration.vaultAddress, "/v1/auth/token/lookup-self")) {
+            httpClient.get(joinURL(configuration.vaultAddress, "/v1/auth/token/lookup-self")) {
                 header("X-Vault-Token", token)
             }
         }

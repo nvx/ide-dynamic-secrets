@@ -21,7 +21,7 @@ class DynamicSecretsGoRunConfigurationExtension : GoRunConfigurationExtension() 
             return
         }
         val envVarConfiguration = configuration.getUserData(EDITOR_KEY) ?: return
-        val result = buildEnvVarsWithProgress(configuration.project, envVarConfiguration)
+        val result = buildEnvVarsWithProgress(configuration.getProject(), envVarConfiguration)
         for (envVar in result.vars) {
             cmdLine.addEnvironmentVariable(envVar.key, envVar.value)
         }
@@ -36,7 +36,7 @@ class DynamicSecretsGoRunConfigurationExtension : GoRunConfigurationExtension() 
     }
 
     override fun <P : GoRunConfigurationBase<*>> createEditor(configuration: P): SettingsEditor<P> {
-        return DynamicSecretsSettingsEditor(configuration.project)
+        return DynamicSecretsSettingsEditor(configuration.getProject())
     }
 
     override fun readExternal(runConfiguration: GoRunConfigurationBase<*>, element: Element) {
